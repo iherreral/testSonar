@@ -1,0 +1,1463 @@
+ #define DEF_AYUVEN                         49997
+ #define DEF_AYUTEC                         49997
+ #define DEF_AYUBAS                         49997
+
+_CMUS0203        *pCmus0203_Recv   = NULL;
+DEF_DIR          Dir_Cmus0203_Recv = 0;
+
+short            Fila_LBCMUS03   = -1;
+short            NumFilasLBCMUS03  = 0;
+DEF_DIR          DirBusqueda3807 = 0;
+
+extern short     Admin_Sistema;
+extern short     Permisos_Defecto;
+extern short     User_Personalizado;
+
+//Variables usadas para la paginacion de la ListBox.
+_LOCC3807        AuxPaginacion3807[2];
+static short     ServicioPB = TRUE;
+
+/* Variables para el control de cambios en los permisos   */
+struct Modulos {
+   char   NomModul[9];
+   char   Ckvisual[2];
+   char   Ckmodif[2];
+   char   Ckcrear[2];
+   char   Ckborrar[2];
+} Lista_Modulos[50];
+
+short  Numero_Modulos = 0;
+
+/* Variables para guardar los cambios parciales realizados */
+struct Modulos Modulos_Cambiados[50];
+short  Numero_Cambios = 0;
+short  Permisos_Nuevos = 0;
+short  Pulsado_Perdef = 0;
+
+short  Guardar_Cambios = 0;  //Esta variable nos dira al pulsar Aceptar
+                             //si hay cambios pendientes de guardar (1) o
+                             //si ya han sido guardados(0)
+
+short  Respuesta = 0;
+/****************************************************************************
+ *   Declaracion de las funciones usadas en las callbacks.                  *
+ ****************************************************************************/
+
+static void   Act_Desact_PBCMUS03(DEF_CBK_DECL);
+
+static void   Bloquear_VentanaCMUS03(DEF_CBK_DECL);
+
+static void   Desbloquear_VentanaCMUS03(DEF_CBK_DECL);
+
+static void   PedirConsulta3807(DEF_CBK_DECL);
+
+static void   Comprobar_CambioPermiso(DEF_CBK_DECL);
+
+static void   Seleccion_LBCMUS03(DEF_CBK_DECL);
+
+static void   Comprobar_Actualizacion(DEF_CBK_DECL);
+
+static void   Guardar_Actualizaciones(DEF_CBK_DECL);
+
+static void   Aceptar_Cambios(DEF_CBK_DECL);
+
+/*********************** COMIENZO BLOQUE DE CALLBACKS **********************/
+
+
+static WCBPROC (CLKMNSAL)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     WINDOW_CLOSE                   **
+**               MN_SALIR_CMD        ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT              rc = 0;
+   AQE_OP_CERRAR     Opciones;
+
+  /******* Lógica de la Aplicación *******/
+
+   AQ_CONTROL_SALIR
+
+   Opciones.CerrarHijas=TRUE;
+
+   if (Permisos_Nuevos || Pulsado_Perdef)
+    {
+      AQ_CERRAR_VENTANA(Dir_Cmus0203_Recv,&Opciones)
+    }
+   else
+    {
+      AQ_CERRAR_VENTANA(0,&Opciones)
+    }
+
+   return(rc);
+
+} // Fin de la Callback (CLKMNSAL)
+
+
+static WCBPROC (CNGEFENT)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               Aplicacion_FID      ->     FIELD_CHANGE                   **
+**               DesModul_FID        ->     FIELD_CHANGE                   **
+**               NomModul_FID        ->     FIELD_CHANGE                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   ServicioPB = TRUE;
+
+   if ((Guardar_Cambios || Numero_Cambios) &&
+        (NumFilasLBCMUS03 )                   )
+    {
+      Respuesta = AQ_MOSTRAR_MSJ(CBI_hwnd,
+                           22022,
+                           DEF_TIPO_SINO,
+                           "¿Desea conservar dichos cambios?",
+                           "","","")
+
+      if (Respuesta == DEF_RESP_BIEN)
+       {
+         //Guardamos los cambios que pudiera haber ya que la nueva consulta puede
+         //que no visualice el modulo actualizado, siempre que el usuario valide
+         //los cambios producidos.
+         if (Guardar_Cambios)
+            {
+             Guardar_Actualizaciones(DEF_CBK_PARMS);
+             Guardar_Cambios = 0;
+            }
+
+         Aceptar_Cambios(DEF_CBK_PARMS);
+         Permisos_Nuevos = 1;
+
+         //Indicamos que el usuario ya esta personalizado.
+         User_Personalizado = 1;
+       }
+      else
+       {
+         Guardar_Cambios = 0;
+       }
+
+      Numero_Cambios = 0;
+      AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+    }
+
+   switch (CBI_WidgetID)
+    {
+      case Aplicacion_FID:
+           AQ_CAMPO_NORMAL(Aplicacion)
+           break;
+
+      case DesModul_FID:
+           AQ_CAMPO_NORMAL(DesModul)
+           break;
+
+      case NomModul_FID:
+           AQ_CAMPO_NORMAL(NomModul)
+           break;
+   }
+
+   /* Inicializamos la LB */
+   NumFilasLBCMUS03 = 0;
+   Fila_LBCMUS03 = -1;
+
+   AQ_VACIA_LB(LBCMUS03)
+   AQ_INICIALIZALB(LBCMUS03)
+   AQ_CAMPO_DESHAB(LBCMUS03)
+
+   /* Inicializamos las check y las deshabilitamos hasta la vuelta del servicio */
+   AQ_PON_VALOR_CB(CkvisualVis,FND_NO)
+   AQ_PON_VALOR_CB(CkborrarBor,FND_NO)
+   AQ_PON_VALOR_CB(CkcrearCre,FND_NO)
+   AQ_PON_VALOR_CB(CkmodifMod,FND_NO)
+   AQ_PON_VALOR_CB(CkmodifAct,FND_NO)
+
+   AQ_CAMPO_DESHAB(CkvisualVis)
+   AQ_CAMPO_DESHAB(CkmodifAct)
+   AQ_CAMPO_DESHAB(CkmodifMod)
+   AQ_CAMPO_DESHAB(CkcrearCre)
+   AQ_CAMPO_DESHAB(CkborrarBor)
+
+   /* Deshabilitamos los PB's de modificar y cancelar, hasta que haya cambios */
+   AQ_DESHABILITAR(PB_LBMODI_CMD)
+   AQ_DESHABILITAR(PB_CANCELAR_CMD)
+
+   Act_Desact_PBCMUS03(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (CNGEFENT)
+
+
+static WCBPROC (Clkmnbas)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               MN_AYUBAS_CMD       ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+
+  /******* Lógica de la Aplicación *******/
+
+   AQ_AYUDA(DEF_AYUBAS)
+
+   return(0);
+
+} // Fin de la Callback (Clkmnbas)
+
+
+static WCBPROC (Clkmnven)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               MN_AYUVEN_CMD       ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+
+  /******* Lógica de la Aplicación *******/
+
+   AQ_AYUDA(DEF_AYUVEN)
+
+   return(0);
+
+} // Fin de la Callback (Clkmnven)
+
+
+static WCBPROC (Clkpbaceptar)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_ACEPTAR_CMD      ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+   AQE_OP_CERRAR     Opciones;
+
+  /******* Lógica de la Aplicación *******/
+   //Guardamos los cambios que pudiera haber quedado sin guardar de la
+   //ultima consulta.
+   if (Guardar_Cambios)
+    {
+      Guardar_Actualizaciones(DEF_CBK_PARMS);
+    }
+
+   Aceptar_Cambios(DEF_CBK_PARMS);
+
+   AQ_CONTROL_SALIR
+
+   Opciones.CerrarHijas=TRUE;
+   AQ_CERRAR_VENTANA(Dir_Cmus0203_Recv,&Opciones)
+
+   return(rc);
+
+} // Fin de la Callback (Clkpbaceptar)
+
+
+static WCBPROC (Clkpbcancelar)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_CANCELAR_CMD     ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+   short             i = 0;
+  /******* Lógica de la Aplicación *******/
+   if (Pulsado_Perdef)
+    {
+      Permisos_Defecto = 0;
+      Pulsado_Perdef = 0;
+    }
+
+   //indicamos que no hay cambios pendientes.
+   Guardar_Cambios= 0;
+   Numero_Cambios = 0;
+
+   AQ_VACIA_LB(LB_CMUS03)
+   AQ_INICIALIZALB(LBCMUS03)
+
+   NumFilasLBCMUS03 = 0;
+   Fila_LBCMUS03 = -1;
+
+   ServicioPB = TRUE;
+   PedirConsulta3807(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Clkpbcancelar)
+
+
+static WCBPROC (Clkpbconsulta)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_CONSULTA_CMD     ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   ServicioPB = TRUE;
+
+   //Guardamos los cambios que pudiera haber ya que la nueva consulta puede
+   //que no visualice el modulo actualizado.
+   if (Guardar_Cambios)
+    {
+      Guardar_Actualizaciones(DEF_CBK_PARMS);
+      Guardar_Cambios = 0;
+    }
+
+   AQ_VACIA_LB(LB_CMUS03)
+   AQ_INICIALIZALB(LBCMUS03)
+
+   NumFilasLBCMUS03 = 0;
+   Fila_LBCMUS03 = -1;
+
+   PedirConsulta3807(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Clkpbconsulta)
+
+
+static WCBPROC (Clkpbinterrumpir)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_INTERRUM_CMD     ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   AQ_INTERRUMPIR(DirBusqueda3807)
+
+   AQ_OCULTAR(PB_INTERRUM_CMD)
+   AQ_DESHABILITAR(PB_INTERRUM_CMD)
+   AQ_VISUALIZAR(PB_CONSULTA_CMD)
+   AQ_HABILITAR(PB_CONSULTA_CMD)
+
+   Desbloquear_VentanaCMUS03 (DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Clkpbinterrumpir)
+
+
+static WCBPROC (Clkpblbmodi)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_LBMODI_CMD       ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   //Actualizo los valores de la LB con los valores de las Check.
+   if (AQ_QUE_VALOR_CB(CkvisualVis) == FND_YES)
+    {
+      strcpy (LBCMUS03CkvisualData[Fila_LBCMUS03], "S");
+    }
+   else
+    {
+      strcpy (LBCMUS03CkvisualData[Fila_LBCMUS03], "N");
+    }
+
+   if (AQ_QUE_VALOR_CB(CkmodifMod) == FND_YES)
+    {
+      strcpy (LBCMUS03CkmodifData[Fila_LBCMUS03], "S");
+    }
+   else
+    {
+      strcpy (LBCMUS03CkmodifData[Fila_LBCMUS03], "N");
+    }
+
+   if (AQ_QUE_VALOR_CB(CkcrearCre) == FND_YES)
+    {
+      strcpy (LBCMUS03CkcrearData[Fila_LBCMUS03], "S");
+    }
+   else
+    {
+      strcpy (LBCMUS03CkcrearData[Fila_LBCMUS03], "N");
+    }
+
+   if (AQ_QUE_VALOR_CB(CkborrarBor) == FND_YES)
+    {
+      strcpy (LBCMUS03CkborrarData[Fila_LBCMUS03], "S");
+    }
+   else
+    {
+      strcpy (LBCMUS03CkborrarData[Fila_LBCMUS03], "N");
+    }
+
+   //Deshabilito el PB de modificacion hasta que haya cambios.
+   AQ_DESHABILITAR(PB_LBMODI_CMD)
+
+   //Compruebo si ha habido alguna actualizacion para activar Aceptar y Cancelar.
+   Comprobar_Actualizacion(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Clkpblbmodi)
+
+
+static WCBPROC (Clkpbperdef)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               PB_PERDEF_CMD       ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   Pulsado_Perdef = 1;
+   Permisos_Defecto = 1;
+
+   //Indicamos que el usuario ya no esta personalizado.
+   User_Personalizado = 0;
+
+   AQ_HABILITAR(PB_ACEPTAR_CMD)
+   AQ_HABILITAR(PB_CANCELAR_CMD)
+   AQ_DESHABILITAR(PB_PERDEF_CMD)
+
+   //Eliminos los cambios que haya hecho previamente.
+   memset (pCmus0203_Recv->LCMUS0203, '\0', sizeof(pCmus0203_Recv->LCMUS0203));
+   pCmus0203_Recv->NumFilas = 0;
+
+   //Indicamos que no hay cambios pendiente.
+   Guardar_Cambios= 0;
+   Numero_Cambios = 0;
+
+   AQ_VACIA_LB(LB_CMUS03)
+   AQ_INICIALIZALB(LBCMUS03)
+
+   NumFilasLBCMUS03 = 0;
+   Fila_LBCMUS03 = -1;
+
+   ServicioPB = TRUE;
+   PedirConsulta3807(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Clkpbperdef)
+
+
+static WCBPROC (Clktutor)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               MN_TUTOR_CMD        ->     BUTTON_CLICK                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   AQ_NAVEGADOR("http://localhost/sistemas/documentacion/usuarios.pdf")
+
+   return(rc);
+
+} // Fin de la Callback (Clktutor)
+
+
+static WCBPROC (Cngchent)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               CkborrarBor_FID     ->     FIELD_CHANGE                   **
+**               CkcrearCre_FID      ->     FIELD_CHANGE                   **
+**               CkmodifAct_FID      ->     FIELD_CHANGE                   **
+**               CkmodifMod_FID      ->     FIELD_CHANGE                   **
+**               CkvisualVis_FID     ->     FIELD_CHANGE                   **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+    USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   switch (CBI_WidgetID)
+    {
+      case CkvisualVis_FID:
+          break;
+      case CkmodifAct_FID:
+          if (AQ_QUE_VALOR_CB(CkmodifAct) == FND_YES)
+             {
+              AQ_PON_VALOR_CB(CkborrarBor,FND_YES)
+              AQ_PON_VALOR_CB(CkcrearCre,FND_YES)
+              AQ_PON_VALOR_CB(CkmodifMod,FND_YES)
+             }
+          else
+             {
+              AQ_PON_VALOR_CB(CkborrarBor,FND_NO)
+              AQ_PON_VALOR_CB(CkcrearCre,FND_NO)
+              AQ_PON_VALOR_CB(CkmodifMod,FND_NO)
+             }
+          break;
+
+      case CkborrarBor_FID:
+      case CkcrearCre_FID:
+      case CkmodifMod_FID:
+          if ((AQ_QUE_VALOR_CB(CkmodifMod)  == FND_NO) ||
+              (AQ_QUE_VALOR_CB(CkcrearCre)  == FND_NO) ||
+              (AQ_QUE_VALOR_CB(CkborrarBor) == FND_NO)    )
+           {
+             AQ_PON_VALOR_CB(CkmodifAct,FND_NO)
+           }
+          else
+           {
+             AQ_PON_VALOR_CB(CkmodifAct,FND_YES)
+           }
+          break;
+    }
+
+  Comprobar_CambioPermiso(DEF_CBK_PARMS);
+
+  return(rc);
+
+} // Fin de la Callback (Cngchent)
+
+
+static WCBPROC (EXTEFENT)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               Aplicacion_FID      ->     FIELD_EXIT                     **
+**               DesModul_FID        ->     FIELD_EXIT                     **
+**               NomModul_FID        ->     FIELD_EXIT                     **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+
+   Act_Desact_PBCMUS03(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (EXTEFENT)
+
+
+static WCBPROC (Msgcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     MSG_NOTIFICATION               **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT         rc = 0;
+   AQE_PAR_SVC    *pParams=NULL;
+
+   _OCC3807       *pRecvDatos3807=NULL;
+
+   short          i, j, k;
+
+  /******* Lógica de la Aplicación *******/
+
+   AQ_SVC_INICIO(pParams)
+   switch(pParams->Servidor)
+   {
+     case SERC38:
+        switch(pParams->Servicio)
+        {
+          case SVCC3807:
+              AQ_VISUALIZAR(PB_CONSULTA_CMD)
+              AQ_OCULTAR(PB_INTERRUM_CMD)
+
+              switch(pParams->severity)
+              {
+                case SEV_OK:
+                   if (ServicioPB)
+                    {
+                      ServicioPB = FALSE;
+                    }
+
+                   AQ_RECIBIR_DATOS_SVC(_OCC3807,pRecvDatos3807)
+                   AQ_RECLB(pRecvDatos3807->NumFilas, LBCMUS03)
+
+                   if (pRecvDatos3807->NumFilas !=0)
+                    {
+                      for (i=0; i < pRecvDatos3807->NumFilas; i++)
+                       {
+                        AQ_INDICELB(i,j,pRecvDatos3807->NumFilas)
+                        AQ_FILA_NORMAL(LBCMUS03,i)
+                        AQ_DESELECT_FILA(LBCMUS03,i)
+
+                        strcpy(LBCMUS03AplicacionData[i],
+                                         pRecvDatos3807->LOCC3807[j].Aplicacion);
+                        strcpy(LBCMUS03NomModulData[i],
+                                         pRecvDatos3807->LOCC3807[j].NomModul);
+                        strcpy(LBCMUS03DesModulData[i],
+                                         pRecvDatos3807->LOCC3807[j].DesModul);
+
+                        //Guardamos los valores recuperados en la variable de control
+                        //de cambios.
+                        strcpy(Lista_Modulos[i].NomModul,
+                                       pRecvDatos3807->LOCC3807[j].NomModul);
+
+                        //Compruebo si el modulo ha sido cambiado en la consulta
+                        //actual, por temas de la paginacion.
+                        for (k = 0; k < Numero_Cambios; k++)
+                         {
+                            if (strcmp(Modulos_Cambiados[k].NomModul,
+                                        pRecvDatos3807->LOCC3807[j].NomModul ) == 0 )
+                             {
+                               break;
+                             }
+                         }
+
+                        if (k < Numero_Cambios)
+                         {
+                           strcpy(LBCMUS03CkvisualData[i],
+                                     Modulos_Cambiados[k].Ckvisual);
+                           strcpy(LBCMUS03CkmodifData[i],
+                                     Modulos_Cambiados[k].Ckmodif);
+                           strcpy(LBCMUS03CkcrearData[i],
+                                     Modulos_Cambiados[k].Ckcrear);
+                           strcpy(LBCMUS03CkborrarData[i],
+                                     Modulos_Cambiados[k].Ckborrar);
+
+                           //Guardamos los valores recuperados en las variables
+                           //de control de cambios.
+                           strcpy(Lista_Modulos[i].Ckvisual,
+                                          Modulos_Cambiados[k].Ckvisual);
+                           strcpy(Lista_Modulos[i].Ckmodif,
+                                          Modulos_Cambiados[k].Ckmodif);
+                           strcpy(Lista_Modulos[i].Ckcrear,
+                                          Modulos_Cambiados[k].Ckcrear);
+                           strcpy(Lista_Modulos[i].Ckborrar,
+                                          Modulos_Cambiados[k].Ckborrar);
+                         }
+                        else
+                         { //Compruebo si el modulo fue actualizado y consolidado
+                           //en una consulta previa
+                           for (k = 0; k < pCmus0203_Recv->NumFilas; k++)
+                            {
+                               if (strcmp(pCmus0203_Recv->LCMUS0203[k].NomModul,
+                                           pRecvDatos3807->LOCC3807[j].NomModul ) == 0 )
+                                {
+                                  break;
+                                }
+                            }
+
+                           if (k < pCmus0203_Recv->NumFilas)
+                            { //Aplicacion modificada previamente
+                              strcpy(LBCMUS03CkvisualData[i],
+                                        pCmus0203_Recv->LCMUS0203[k].Ckvisual);
+                              strcpy(LBCMUS03CkmodifData[i],
+                                        pCmus0203_Recv->LCMUS0203[k].Ckmodif);
+                              strcpy(LBCMUS03CkcrearData[i],
+                                        pCmus0203_Recv->LCMUS0203[k].Ckcrear);
+                              strcpy(LBCMUS03CkborrarData[i],
+                                        pCmus0203_Recv->LCMUS0203[k].Ckborrar);
+
+                              //Guardamos los valores recuperados en las variables
+                              //de control de cambios.
+                              strcpy(Lista_Modulos[i].Ckvisual,
+                                             pCmus0203_Recv->LCMUS0203[k].Ckvisual);
+                              strcpy(Lista_Modulos[i].Ckmodif,
+                                             pCmus0203_Recv->LCMUS0203[k].Ckmodif);
+                              strcpy(Lista_Modulos[i].Ckcrear,
+                                             pCmus0203_Recv->LCMUS0203[k].Ckcrear);
+                              strcpy(Lista_Modulos[i].Ckborrar,
+                                             pCmus0203_Recv->LCMUS0203[k].Ckborrar);
+                            }
+                           else
+                            { //aplicacion no modificada.
+                              strcpy(LBCMUS03CkvisualData[i],
+                                        pRecvDatos3807->LOCC3807[j].Ckvisual);
+                              strcpy(LBCMUS03CkmodifData[i],
+                                        pRecvDatos3807->LOCC3807[j].Ckmodif);
+                              strcpy(LBCMUS03CkcrearData[i],
+                                        pRecvDatos3807->LOCC3807[j].Ckcrear);
+                              strcpy(LBCMUS03CkborrarData[i],
+                                        pRecvDatos3807->LOCC3807[j].Ckborrar);
+
+                              //Guardamos los valores recuperados en las variables
+                              //de control de cambios.
+                              strcpy(Lista_Modulos[i].Ckvisual,
+                                             pRecvDatos3807->LOCC3807[j].Ckvisual);
+                              strcpy(Lista_Modulos[i].Ckmodif,
+                                             pRecvDatos3807->LOCC3807[j].Ckmodif);
+                              strcpy(Lista_Modulos[i].Ckcrear,
+                                             pRecvDatos3807->LOCC3807[j].Ckcrear);
+                              strcpy(Lista_Modulos[i].Ckborrar,
+                                             pRecvDatos3807->LOCC3807[j].Ckborrar);
+                            } //Fin else Actual. de LB de cmus0203 o de consulta
+                         }    //Fin else Actual. de LB por cambio previo.
+                       }      //Fin del for.
+
+                      AQ_NUM_FILAS(LBCMUS03,pRecvDatos3807->NumFilas)
+                      AQ_GUARDALIMLB(AuxPaginacion3807, pRecvDatos3807->NumFilas,
+                                     pRecvDatos3807->LOCC3807,LBCMUS03)
+
+                      for (i=0;i<NUMLBCMUS03ROWS;i++)
+                       {
+                          AQ_DESELECT_FILA(LBCMUS03,i)
+                       }
+                    }
+
+                   NumFilasLBCMUS03 = pRecvDatos3807->NumFilas;
+                   Numero_Modulos   = pRecvDatos3807->NumFilas;
+
+                   Fila_LBCMUS03  = 0;
+                   AQ_SELECT_FILA(LBCMUS03,0)
+
+                   Seleccion_LBCMUS03(DEF_CBK_PARMS);
+                   Desbloquear_VentanaCMUS03(DEF_CBK_PARMS);
+                   break;
+
+                case SEV_APPL:
+                   AQ_MOSTRAR_MSJ(CBI_hwnd,
+                                  (SHORT)pParams->explan_code,
+                                  DEF_TIPO_ERROR, pParams->explan_data,
+                                  "", "", ""         )
+                   Desbloquear_VentanaCMUS03(DEF_CBK_PARMS);
+                   break;
+                default:   //Severity
+                   Desbloquear_VentanaCMUS03(DEF_CBK_PARMS);
+                   break;
+              }
+              break;
+          default:         //Servicios
+              break;
+        }
+        break;
+
+     default:
+        break;
+   }
+
+   // Libero memoria del mensaje de ida
+   AQ_LIBERAR_MEMORIA(pParams->DirIda)
+
+   // Libero la memoria del mensaje de vuelta
+   AQ_LIBERAR_MEMORIA(pParams->DirVuelta)
+
+   AQ_SVC_FIN(pParams)
+
+   return(rc);
+
+} // Fin de la Callback (Msgcmus03)
+
+
+static WCBPROC (Othcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     OTHER_GUI_EVENT                **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT             rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+
+   switch(CBI_GUImsg)
+   {
+
+      AQ_TRATAR_MSGS                 /* Macro tratamiento de Ayuda */
+
+      case MSJ_LIBERAR:
+          AQ_LIBERAR_DATOSENV
+          break;
+
+      case MSJ_SEGURIDAD:
+          AQ_SEGURIDAD(CLICMUS)
+          break;
+
+      case MSJ_CERRAR_CLIENTE:
+          AQ_CERRAR_CLIENTE
+          break;
+
+      case MSJ_PUEDO_CERRAR:
+          AQ_CONF_CIERRE
+          break;
+
+      case MSJ_CURSOR:
+          AQ_ACTIVAR_CURSOR
+          break;
+
+      case MSJ_NO_HIJO:
+          AQ_DESREGISTRAR
+          break;
+
+      case MSJ_DATOS_VENTANA:
+          break;
+
+      case MSJ_ACTUALIZAR_LB:
+          break;
+
+      case MSJ_CERRAR_VENTANA:
+          AQ_SEGUIR_CERRANDO
+          break;
+   }
+
+   return(rc);
+
+} // Fin de la Callback (Othcmus03)
+
+
+static WCBPROC (Paglbcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               LBCMUS03_FID        ->     LIST_PAGEDOWN                  **
+**               LBCMUS03_FID        ->     LIST_PAGEUP                    **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+    USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   AQ_PERMISOLB
+
+   AQ_FINLB(LBCMUS03)
+
+   //Guardamos los cambios que pudiera haber ya que la nueva consulta puede
+   //que no visualice el modulo actualizado.
+   if (Guardar_Cambios)
+    {
+      Guardar_Actualizaciones(DEF_CBK_PARMS);
+      Guardar_Cambios = 0;
+    }
+
+   PedirConsulta3807(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Paglbcmus03)
+
+
+static WCBPROC (Pdtcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     PREDESTROY                     **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT             rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+
+   return(rc);
+
+} // Fin de la Callback (Pdtcmus03)
+
+
+static WCBPROC (Prdcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     PREDISPLAY                     **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT             rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+
+   AQ_REG_DATOSVEN
+   AQ_CHECKSEG(CLICMUS)
+
+   // Colocación de la ventana
+   //AQ_POS_VENTANA(75,200)
+
+   Redcmus03(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Prdcmus03)
+
+
+static WCBPROC (Redcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               VENTANA             ->     REDISPLAY                      **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT             rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+
+   /** Se reciben los datos de la ventana llamante **/
+   AQ_RECIBIR_DATOS_VEN(_CMUS0203, Dir_Cmus0203_Recv, pCmus0203_Recv)
+
+   NumFilasLBCMUS03 = 0;
+   Fila_LBCMUS03 = -1;
+
+   //Inicializo las variables de control para todos los accesos a la ventana.
+   Numero_Modulos = 0;
+   Numero_Cambios = 0;
+   Guardar_Cambios = 0;
+   Permisos_Nuevos = 0;
+   Pulsado_Perdef = 0;
+
+   AQ_VACIA_LB(LBCMUS03)
+   AQ_INICIALIZALB(LBCMUS03)
+   AQ_CAMPO_DESHAB(LBCMUS03)
+
+   AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+   AQ_DESHABILITAR(PB_CANCELAR_CMD)
+   AQ_DESHABILITAR(PB_LBMODI_CMD)
+
+   AQ_CAMPO_DESHAB(CkvisualVis)
+   AQ_CAMPO_DESHAB(CkmodifAct)
+   AQ_CAMPO_DESHAB(CkmodifMod)
+   AQ_CAMPO_DESHAB(CkcrearCre)
+   AQ_CAMPO_DESHAB(CkborrarBor)
+
+   ServicioPB = TRUE;
+   PedirConsulta3807(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Redcmus03)
+
+
+static WCBPROC (Sellbcmus03)
+/****************************************************************************
+**              Controles/Eventos que invocan esta callback                **
+**                                                                         **
+**               LBCMUS03_FID        ->     LIST_SELECT                    **
+****************************************************************************/
+{
+  /*********  Variables Locales  *********/
+   USHORT            rc = 0;
+
+  /******* Lógica de la Aplicación *******/
+   Fila_LBCMUS03 = CBI_ListRow;
+
+   Seleccion_LBCMUS03(DEF_CBK_PARMS);
+
+   return(rc);
+
+} // Fin de la Callback (Sellbcmus03)
+
+
+/************************* COMIENZO BLOQUE DE OTROS ************************/
+/****************************************************************************
+ * Nombre      : Act_Desact_PBCMUS03
+ * Descripción : Comprueba los atributos de los campos de busqueda para saber
+ *                    si debemos o no activar el pushbutton de Consulta
+ *                    Ademas se comprueba si el PB Aceptar debe estar activado
+ ****************************************************************************/
+static void Act_Desact_PBCMUS03(DEF_CBK_DECL)
+{
+  SHORT Atributos=0;
+
+  Atributos = AplicacionAttr + NomModulAttr + DesModulAttr;
+  //Comprobacion de los atributos de los campos de busqueda.
+  if (Atributos == 3*AT_NORMAL)
+   { //Comprobacion de si se debe habilitar Aceptar o no, al modificar la consulta.
+     //Si hay cambios previos se habilita.
+     if ((Numero_Cambios || Pulsado_Perdef) &&
+         Admin_Sistema)
+      {
+        AQ_HABILITAR(PB_ACEPTAR_CMD)
+        AQ_HABILITAR(PB_CANCELAR_CMD)
+      }
+     else
+      {
+        AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+        AQ_DESHABILITAR(PB_CANCELAR_CMD)
+      }
+
+     AQ_HABILITAR(PB_CONSULTA_CMD)
+   }
+  else
+   {
+     AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+     AQ_DESHABILITAR(PB_CONSULTA_CMD)
+   }
+
+  if (User_Personalizado           &&
+      Admin_Sistema  )
+   {
+     AQ_HABILITAR(PB_PERDEF_CMD)
+   }
+  else
+   {
+     AQ_DESHABILITAR(PB_PERDEF_CMD)
+   }
+
+}
+
+/****************************************************************************
+ * Nombre      : Bloquear_VentanaCMUS03
+ * Descripción : Bloquea los controles de la ventana durante la solicitud de
+ *                  servicios.
+ ****************************************************************************/
+ static void Bloquear_VentanaCMUS03 (DEF_CBK_DECL)
+ {
+   //Bloqueo de los campos.
+   AQ_CAMPO_DESHAB(NomModul)
+   AQ_CAMPO_DESHAB(DesModul)
+   AQ_CAMPO_DESHAB(Aplicacion)
+   AQ_CAMPO_DESHAB(LBCMUS03)
+
+   AQ_CAMPO_DESHAB(CkvisualVis)
+   AQ_CAMPO_DESHAB(CkmodifAct)
+   AQ_CAMPO_DESHAB(CkmodifMod)
+   AQ_CAMPO_DESHAB(CkcrearCre)
+   AQ_CAMPO_DESHAB(CkborrarBor)
+
+   //Bloqueo de los pushbuttons.
+   AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+   AQ_DESHABILITAR(PB_CANCELAR_CMD)
+   AQ_DESHABILITAR(PB_LBMODI_CMD)
+   AQ_DESHABILITAR(PB_PERDEF_CMD)
+
+   //Bloqueo de los menus.
+   AQ_DESHABILITAR(MN_SALIR_CMD)
+   AQ_DESHABILITAR(MN_AYUBAS_CMD)
+   AQ_DESHABILITAR(MN_TUTOR_CMD)
+   AQ_DESHABILITAR(MN_AYUVEN_CMD)
+ }
+
+/****************************************************************************
+ * Nombre      : Desbloquear_VentanaCMUS03
+ * Descripción : Desbloquea los controles de la ventana tras la recepcion de
+ *                  servicios.
+ ****************************************************************************/
+ static void Desbloquear_VentanaCMUS03 (DEF_CBK_DECL)
+ {
+   //Desbloqueo de los campos.
+   AQ_CAMPO_NORMAL(NomModul)
+   AQ_CAMPO_NORMAL(DesModul)
+   AQ_CAMPO_NORMAL(Aplicacion)
+
+   if (NumFilasLBCMUS03 > 0)
+    {
+      AQ_CAMPO_NORMAL(LBCMUS03)
+
+      AQ_CAMPO_NORMAL(CkvisualVis)
+      AQ_CAMPO_NORMAL(CkmodifAct)
+      AQ_CAMPO_NORMAL(CkmodifMod)
+      AQ_CAMPO_NORMAL(CkcrearCre)
+      AQ_CAMPO_NORMAL(CkborrarBor)
+    }
+   else
+    {
+      AQ_CAMPO_DESHAB(LBCMUS03)
+
+      AQ_CAMPO_DESHAB(CkvisualVis)
+      AQ_CAMPO_DESHAB(CkmodifAct)
+      AQ_CAMPO_DESHAB(CkmodifMod)
+      AQ_CAMPO_DESHAB(CkcrearCre)
+      AQ_CAMPO_DESHAB(CkborrarBor)
+    }
+
+   //Desbloqueo de los pushbuttons.
+   AQ_VISUALIZAR(PB_CONSULTA_CMD)
+   AQ_HABILITAR(PB_CONSULTA_CMD)
+   AQ_OCULTAR(PB_INTERRUM_CMD)
+
+   if (User_Personalizado           &&
+       Admin_Sistema  )
+    {
+      AQ_HABILITAR(PB_PERDEF_CMD)
+    }
+   else
+    {
+      AQ_DESHABILITAR(PB_PERDEF_CMD)
+    }
+
+   if ((Numero_Cambios || Pulsado_Perdef) &&
+       Admin_Sistema )
+    { //Si hay cambios o he pulsado perdef en esta sesion => habilitar.
+      AQ_HABILITAR(PB_ACEPTAR_CMD)
+      AQ_HABILITAR(PB_CANCELAR_CMD)
+    }
+   else
+    {
+      AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+      AQ_DESHABILITAR(PB_CANCELAR_CMD)
+    }
+
+   //Desbloqueo de los menus.
+   AQ_HABILITAR(MN_AYUBAS_CMD)
+   AQ_HABILITAR(MN_TUTOR_CMD)
+   AQ_HABILITAR(MN_AYUVEN_CMD)
+   AQ_HABILITAR(MN_SALIR_CMD)
+ }
+
+/****************************************************************************
+ * Nombre      : PedirConsulta3807
+ * Descripción : Construye las condiciones del where para la consulta de
+ *                    usuarios del servicio SVCC3807
+ ****************************************************************************/
+static void PedirConsulta3807 (DEF_CBK_DECL)
+{
+    DEF_DIR          DirSendConsulta3807=0;
+    _ICC3807         *pSendConsulta3807 =NULL;
+
+    DEF_DIR          DirRecvDatos3807=0;
+    _OCC3807         *pRecvDatos3807 =NULL;
+
+    AQE_ENV_OPTIONS  Options;
+
+    AQ_PEDIR_MEMORIA(sizeof(_ICC3807),DirSendConsulta3807,pSendConsulta3807);
+    AQ_PEDIR_MEMORIA(sizeof(_OCC3807),DirRecvDatos3807,pRecvDatos3807);
+
+    memset (pSendConsulta3807, '\0', sizeof(_ICC3807));
+
+    Options.Seguimiento = FALSE;
+    Options.modo = SINCRONO;
+    strcpy(Options.MapName,"ICC3807");
+
+    strcpy (pSendConsulta3807->Usuario,pCmus0203_Recv->Usuario);
+    pSendConsulta3807->Tipusu= pCmus0203_Recv->Tipusu;
+    pSendConsulta3807->Flag  = Permisos_Defecto;
+
+    //Imponemos la condicion de busqueda para el Nombre del Módulo
+    NewQuitaBlancos (NomModulData, NomModulData);
+    if (NomModulData[0] != '\0')
+     {
+       sprintf(pSendConsulta3807->Consulta, "WHERE NOMMODUL MATCHES '%s'", NomModulData);
+     }
+    else
+     {
+       sprintf(pSendConsulta3807->Consulta, "WHERE 1=1");
+     }
+
+    //Imponemos la condicion de busqueda para la Descripcion del Módulo
+    NewQuitaBlancos(DesModulData, DesModulData);
+    if (DesModulData[0] != '\0')
+     {
+       sprintf(pSendConsulta3807->Consulta, "%s AND DESMODUL MATCHES '%s'",
+                  pSendConsulta3807->Consulta, DesModulData);
+     }
+
+    //Imponemos la condicion de busqueda para la Aplicacion
+    NewQuitaBlancos(AplicacionData, AplicacionData);
+    if (AplicacionData[0] != '\0')
+     {
+       sprintf(pSendConsulta3807->Consulta, "%s AND DESAPLIC MATCHES '%s'",
+                  pSendConsulta3807->Consulta, AplicacionData);
+     }
+
+    //Se añade aquí el ORDER por temas de paginación.
+    if (CBI_EventID == LIST_PAGEUP)
+     {
+       sprintf(pSendConsulta3807->Consulta,
+                   "%s AND (DESAPLIC < '%s' OR (DESAPLIC = '%s' AND NOMMODUL < '%s')) ORDER BY DESAPLIC DESC, NOMMODUL DESC",
+                   pSendConsulta3807->Consulta, AuxPaginacion3807[0].Aplicacion,
+                   AuxPaginacion3807[0].Aplicacion, AuxPaginacion3807[0].NomModul);
+     }
+    else
+     {
+       if (CBI_EventID == LIST_PAGEDOWN)
+        {
+          sprintf(pSendConsulta3807->Consulta,
+                      "%s AND (DESAPLIC > '%s' OR (DESAPLIC = '%s' AND NOMMODUL > '%s')) ORDER BY DESAPLIC ASC, NOMMODUL ASC",
+                      pSendConsulta3807->Consulta, AuxPaginacion3807[1].Aplicacion,
+                      AuxPaginacion3807[1].Aplicacion, AuxPaginacion3807[1].NomModul);
+        }
+       else
+        {
+          sprintf(pSendConsulta3807->Consulta,
+                      "%s ORDER BY DESAPLIC, NOMMODUL",
+                      pSendConsulta3807->Consulta);
+        }
+     }
+
+    AQ_OCULTAR(PB_CONSULTA_CMD)
+    AQ_VISUALIZAR(PB_INTERRUM_CMD)
+    AQ_HABILITAR(PB_INTERRUM_CMD)
+
+    Bloquear_VentanaCMUS03 (DEF_CBK_PARMS);
+
+    AQ_ENVIAR_INT(&Options,SERC38,SVCC3807,
+                  DirSendConsulta3807,sizeof(_ICC3807),
+                  DirRecvDatos3807,   sizeof(_OCC3807),
+                  &DirBusqueda3807)
+}
+
+/****************************************************************************
+ * Nombre      : Comprobar_CambioPermiso
+ * Descripción : Comprueba si se han cambiado los permisos para la fila
+ *                    seleccionada para habilitar o no el PB de modificacion.
+ ****************************************************************************/
+static void Comprobar_CambioPermiso(DEF_CBK_DECL)
+{
+  short    Cambio = 0;
+
+  if (((AQ_QUE_VALOR_CB(CkvisualVis) == FND_YES)  &&
+       (LBCMUS03CkvisualData[Fila_LBCMUS03][0] == CAR_N)) ||
+      ((AQ_QUE_VALOR_CB(CkvisualVis) == FND_NO)   &&
+       (LBCMUS03CkvisualData[Fila_LBCMUS03][0] == CAR_S))    )
+   {
+     Cambio = 1;
+   }
+
+  if (((AQ_QUE_VALOR_CB(CkmodifMod) == FND_YES)  &&
+       (LBCMUS03CkmodifData[Fila_LBCMUS03][0] == CAR_N)) ||
+      ((AQ_QUE_VALOR_CB(CkmodifMod) == FND_NO)   &&
+       (LBCMUS03CkmodifData[Fila_LBCMUS03][0] == CAR_S))   )
+   {
+     Cambio = 1;
+   }
+
+  if ( ((AQ_QUE_VALOR_CB(CkcrearCre) == FND_YES)  &&
+        (LBCMUS03CkcrearData[Fila_LBCMUS03][0] == CAR_N)) ||
+       ((AQ_QUE_VALOR_CB(CkcrearCre) == FND_NO)   &&
+        (LBCMUS03CkcrearData[Fila_LBCMUS03][0] == CAR_S))   )
+   {
+     Cambio = 1;
+   }
+
+  if ( ((AQ_QUE_VALOR_CB(CkborrarBor) == FND_YES)  &&
+        (LBCMUS03CkborrarData[Fila_LBCMUS03][0] == CAR_N)) ||
+       ((AQ_QUE_VALOR_CB(CkborrarBor) == FND_NO)   &&
+        (LBCMUS03CkborrarData[Fila_LBCMUS03][0] == CAR_S))   )
+   {
+     Cambio = 1;
+   }
+
+  if (Cambio && Admin_Sistema)
+   {
+      AQ_HABILITAR(PB_LBMODI_CMD)
+   }
+  else
+   {
+     AQ_DESHABILITAR(PB_LBMODI_CMD)
+   }
+}
+
+/****************************************************************************
+ * Nombre      : Seleccion_LBCMUS03
+ * Descripción : A partir de la fila seleccionada informa las check box
+ *                      con los valores apropiados.
+ ****************************************************************************/
+static void   Seleccion_LBCMUS03(DEF_CBK_DECL)
+{
+   if (LBCMUS03CkvisualData[Fila_LBCMUS03][0] == CAR_S)
+    {
+      AQ_PON_VALOR_CB(CkvisualVis,FND_YES)
+    }
+   else
+    {
+      AQ_PON_VALOR_CB(CkvisualVis,FND_NO)
+    }
+
+   if (LBCMUS03CkcrearData[Fila_LBCMUS03][0] == CAR_S)
+    {
+      AQ_PON_VALOR_CB(CkcrearCre,FND_YES)
+    }
+   else
+    {
+      AQ_PON_VALOR_CB(CkcrearCre,FND_NO)
+    }
+
+   if (LBCMUS03CkmodifData[Fila_LBCMUS03][0] == CAR_S)
+    {
+      AQ_PON_VALOR_CB(CkmodifMod,FND_YES)
+    }
+   else
+    {
+      AQ_PON_VALOR_CB(CkmodifMod,FND_NO)
+    }
+
+   if (LBCMUS03CkborrarData[Fila_LBCMUS03][0] == CAR_S)
+    {
+      AQ_PON_VALOR_CB(CkborrarBor,FND_YES)
+    }
+   else
+    {
+      AQ_PON_VALOR_CB(CkborrarBor,FND_NO)
+    }
+
+   if ((AQ_QUE_VALOR_CB(CkmodifMod)  == FND_NO) ||
+       (AQ_QUE_VALOR_CB(CkcrearCre)  == FND_NO) ||
+       (AQ_QUE_VALOR_CB(CkborrarBor) == FND_NO)    )
+    {
+      AQ_PON_VALOR_CB(CkmodifAct,FND_NO)
+    }
+   else
+    {
+      AQ_PON_VALOR_CB(CkmodifAct,FND_YES)
+    }
+
+   AQ_DESHABILITAR(PB_LBMODI_CMD)
+}
+
+/****************************************************************************
+ * Nombre      : Comprobar_Actualizacion
+ * Descripción : Comprueba si se ha actualizado algun valor para habilitar
+ *                    o no los PBs de Aceptar y Cancelar.
+ ****************************************************************************/
+static void   Comprobar_Actualizacion(DEF_CBK_DECL)
+{
+   short      i = 0;
+
+   for ( i= 0; i < Numero_Modulos; i++)
+      {
+        if ((strcmp (LBCMUS03CkvisualData[i],Lista_Modulos[i].Ckvisual)) ||
+            (strcmp (LBCMUS03CkmodifData[i], Lista_Modulos[i].Ckmodif))  ||
+            (strcmp (LBCMUS03CkcrearData[i], Lista_Modulos[i].Ckcrear))  ||
+            (strcmp (LBCMUS03CkborrarData[i],Lista_Modulos[i].Ckborrar))   )
+          {
+           break;
+          }
+     }
+
+   if (i < Numero_Modulos)
+    { //Ha habido alguna actualizacion
+      if (Admin_Sistema)
+       {
+         AQ_HABILITAR(PB_ACEPTAR_CMD)
+       }
+      else
+       {
+         AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+       }
+
+      AQ_HABILITAR(PB_CANCELAR_CMD)
+      Guardar_Cambios = 1;
+   }
+  else
+   {
+      if ((Numero_Cambios || Pulsado_Perdef ) &&
+          Admin_Sistema )
+       { //Habilitaremos Aceptar siempre que haya habido algun cambio.
+         AQ_HABILITAR(PB_ACEPTAR_CMD)
+         AQ_HABILITAR(PB_CANCELAR_CMD)
+         Guardar_Cambios = 1;
+       }
+      else
+       {
+         AQ_DESHABILITAR(PB_ACEPTAR_CMD)
+         AQ_DESHABILITAR(PB_CANCELAR_CMD)
+         Guardar_Cambios = 0;
+       }
+   }
+}
+
+/****************************************************************************
+ * Nombre      : Guardar_Actualizaciones
+ * Descripción : Guarda en la variable global las actualizaciones producidas.
+ *
+ ****************************************************************************/
+static void   Guardar_Actualizaciones(DEF_CBK_DECL)
+{
+   short      i = 0, k = 0;
+
+   for ( i= 0; i < Numero_Modulos; i++)
+      {
+        if ((strcmp (LBCMUS03CkvisualData[i],Lista_Modulos[i].Ckvisual) ||
+             strcmp (LBCMUS03CkmodifData[i], Lista_Modulos[i].Ckmodif)  ||
+             strcmp (LBCMUS03CkcrearData[i], Lista_Modulos[i].Ckcrear)  ||
+             strcmp (LBCMUS03CkborrarData[i],Lista_Modulos[i].Ckborrar)   ) &&
+            (Numero_Cambios < _CMUS0203__LCMUS0203_SIZE )                    )
+          {
+            //Comprobamos si el modulo ya habia sido actualizado
+            for (k = 0; k < Numero_Cambios; k++)
+              {
+                if (strcmp(Modulos_Cambiados[k].NomModul,
+                           LBCMUS03NomModulData[i] ) == 0 )
+                   {
+                     break;
+                   }
+              }
+
+            if ( k < Numero_Cambios )
+               {  // Modulo ya actualizado previamente
+                strcpy(Modulos_Cambiados[k].Ckvisual,
+                                 LBCMUS03CkvisualData[i]);
+                strcpy(Modulos_Cambiados[k].Ckcrear,
+                                 LBCMUS03CkcrearData[i]);
+                strcpy(Modulos_Cambiados[k].Ckmodif,
+                                 LBCMUS03CkmodifData[i]);
+                strcpy(Modulos_Cambiados[k].Ckborrar,
+                                 LBCMUS03CkborrarData[i]);
+               }
+            else
+               {   // Modulo no actualizado todavia.
+                strcpy(Modulos_Cambiados[Numero_Cambios].NomModul,
+                                 LBCMUS03NomModulData[i]);
+                strcpy(Modulos_Cambiados[Numero_Cambios].Ckvisual,
+                                 LBCMUS03CkvisualData[i]);
+                strcpy(Modulos_Cambiados[Numero_Cambios].Ckcrear,
+                                 LBCMUS03CkcrearData[i]);
+                strcpy(Modulos_Cambiados[Numero_Cambios].Ckmodif,
+                                 LBCMUS03CkmodifData[i]);
+                strcpy(Modulos_Cambiados[Numero_Cambios].Ckborrar,
+                                 LBCMUS03CkborrarData[i]);
+
+                Numero_Cambios++;
+               }  // Fin if de Actualizar variable de cambios
+          }       // Fin if de comprobacion de cambios.
+     }            // Fin del for
+}
+
+/****************************************************************************
+ * Nombre      : Aceptar_Cambios
+ * Descripción : Guarda en la copy CMUS0203 los cambios producidos.
+ *
+ ****************************************************************************/
+static void   Aceptar_Cambios(DEF_CBK_DECL)
+{
+   short      i = 0, k = 0;
+
+   for ( i= 0; i < Numero_Cambios; i++)
+      {
+        if (pCmus0203_Recv->NumFilas < _CMUS0203__LCMUS0203_SIZE )
+           {
+             //Comprobamos si el modulo ya habia sido actualizado
+             for (k = 0; k < pCmus0203_Recv->NumFilas; k++)
+               {
+                 if (strcmp(pCmus0203_Recv->LCMUS0203[k].NomModul,
+                            Modulos_Cambiados[i].NomModul ) == 0 )
+                    {
+                      break;
+                    }
+               }
+
+             if ( k < pCmus0203_Recv->NumFilas )
+                {  // Modulo ya actualizado previamente
+                 strcpy(pCmus0203_Recv->LCMUS0203[k].Ckvisual,
+                                  Modulos_Cambiados[i].Ckvisual);
+                 strcpy(pCmus0203_Recv->LCMUS0203[k].Ckcrear,
+                                  Modulos_Cambiados[i].Ckcrear);
+                 strcpy(pCmus0203_Recv->LCMUS0203[k].Ckmodif,
+                                  Modulos_Cambiados[i].Ckmodif);
+                 strcpy(pCmus0203_Recv->LCMUS0203[k].Ckborrar,
+                                  Modulos_Cambiados[i].Ckborrar);
+                }
+             else
+                {   // Modulo no actualizado todavia.
+                 strcpy(pCmus0203_Recv->LCMUS0203[pCmus0203_Recv->NumFilas].NomModul,
+                                  Modulos_Cambiados[i].NomModul);
+                 strcpy(pCmus0203_Recv->LCMUS0203[pCmus0203_Recv->NumFilas].Ckvisual,
+                                  Modulos_Cambiados[i].Ckvisual);
+                 strcpy(pCmus0203_Recv->LCMUS0203[pCmus0203_Recv->NumFilas].Ckcrear,
+                                  Modulos_Cambiados[i].Ckcrear);
+                 strcpy(pCmus0203_Recv->LCMUS0203[pCmus0203_Recv->NumFilas].Ckmodif,
+                                  Modulos_Cambiados[i].Ckmodif);
+                 strcpy(pCmus0203_Recv->LCMUS0203[pCmus0203_Recv->NumFilas].Ckborrar,
+                                  Modulos_Cambiados[i].Ckborrar);
+
+                 pCmus0203_Recv->NumFilas++;
+                }  // Fin if de Actualizar copy CMUS0203
+          }        // Fin id comprobacion limite de array de la copy.
+     }             // Fin del for
+}
